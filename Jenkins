@@ -1,14 +1,10 @@
-stage('Sonar Analysis') {
-  steps {
-    sh 'mvn clean verify sonar:sonar -Dsonar.projectKey=student -Dsonar.login=XXXX'
-  }
-}
-ajouter ce script dans ma script 
 pipeline {
     agent any
 
     environment {
+        // CHANGÉ : Utilisation du nouvel ID de credential DockerHub
         DOCKERHUB_CREDENTIALS = 'jenkins_dhia'
+        // CHANGÉ : Utilisation du nouvel utilisateur DockerHub (dhiaayadi)
         IMAGE_NAME = "dhiaayadi/student"
         IMAGE_TAG = "latest"
     }
@@ -22,8 +18,9 @@ pipeline {
 
         stage('Checkout from GitHub') {
             steps {
+                // CHANGÉ : Utilisation de la branche 'main' au lieu de 'master'
                 git branch: 'main',
-                    url: 'https://github.com/dhiaayadi/student_management.git'
+                    url: 'https://github.com/dhiaayadi/Student_Management.git'
             }
         }
 
