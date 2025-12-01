@@ -2,14 +2,15 @@ pipeline {
     agent any
 
     environment {
-        // CHANGÉ : Utilisation du nouvel ID de credential DockerHub
+        // ID du Credential Jenkins pour DockerHub (Nom d'utilisateur/Mot de passe)
         DOCKERHUB_CREDENTIALS = 'jenkins_dhia'
-        // CHANGÉ : Utilisation du nouvel utilisateur DockerHub (dhiaayadi)
+        // Nom de l'image Docker
         IMAGE_NAME = "dhiaayadi/student"
         IMAGE_TAG = "latest"
     }
 
     tools {
+        // Assurez-vous que 'jdk17' et 'maven' sont configurés dans les Outils Globaux de Jenkins
         jdk 'jdk17'
         maven 'maven'
     }
@@ -18,7 +19,8 @@ pipeline {
 
         stage('Checkout from GitHub') {
             steps {
-                // CHANGÉ : Utilisation de la branche 'main' au lieu de 'master'
+                // S'assure que l'URL est correcte (avec le trait d'union '-'), 
+                // et utilise la branche 'main'
                 git branch: 'main',
                     url: 'https://github.com/dhiaayadi/Student-Management.git'
             }
@@ -26,13 +28,16 @@ pipeline {
 
         stage('Build Maven') {
             steps {
-                sh 'mvn clean package -DskipTests'
+                // Utilisation de 'bat' pour exécuter les commandes Maven sur Windows
+                bat 'mvn clean package -DskipTests'
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+                // Utilisation de 'bat' pour les commandes Docker
+                // Note : Vous devez avoir Docker installé sur l'agent Windows.
+                bat "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
             }
         }
 
@@ -43,9 +48,11 @@ pipeline {
                     usernameVariable: 'DOCKERHUB_USER',
                     passwordVariable: 'DOCKERHUB_PASS'
                 )]) {
-
-                    sh 'echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin'
-                    sh "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
+                    // Les commandes de connexion et de push doivent utiliser 'bat'
+                    // L'injection de mot de passe via echo/pipe peut être tricky en BAT,
+                    // mais cela fonctionne souvent si l'agent a accès au 'docker' CLI.
+                    bat 'echo %DOCKERHUB_PASS% | docker login -u %DOCKERHUB_USER% --password-stdin'
+                    bat "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
                 }
             }
         }
