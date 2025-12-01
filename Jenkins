@@ -19,8 +19,7 @@ pipeline {
 
         stage('Checkout from GitHub') {
             steps {
-                // S'assure que l'URL est correcte (avec le trait d'union '-'), 
-                // et utilise la branche 'main'
+                // S'assure que l'URL est correcte (avec le trait d'union '-')
                 git branch: 'main',
                     url: 'https://github.com/dhiaayadi/Student-Management.git'
             }
@@ -28,15 +27,17 @@ pipeline {
 
         stage('Build Maven') {
             steps {
-                // Utilisation de 'bat' pour exécuter les commandes Maven sur Windows
-                bat 'mvn clean package -DskipTests'
+                // CORRECTION : Le bloc withEnv injecte la variable JAVA_HOME avant l'exécution de Maven.
+                withEnv(["JAVA_HOME=${tool 'jdk17'}"]) {
+                    // Utilisation de 'bat' pour exécuter les commandes Maven sur Windows
+                    bat 'mvn clean package -DskipTests'
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 // Utilisation de 'bat' pour les commandes Docker
-                // Note : Vous devez avoir Docker installé sur l'agent Windows.
                 bat "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
             }
         }
@@ -49,8 +50,6 @@ pipeline {
                     passwordVariable: 'DOCKERHUB_PASS'
                 )]) {
                     // Les commandes de connexion et de push doivent utiliser 'bat'
-                    // L'injection de mot de passe via echo/pipe peut être tricky en BAT,
-                    // mais cela fonctionne souvent si l'agent a accès au 'docker' CLI.
                     bat 'echo %DOCKERHUB_PASS% | docker login -u %DOCKERHUB_USER% --password-stdin'
                     bat "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
                 }
