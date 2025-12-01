@@ -20,7 +20,7 @@ pipeline {
             steps {
                 // CHANGÉ : Utilisation de la branche 'main' au lieu de 'master'
                 git branch: 'main',
-                    url: 'https://github.com/dhiaayadi/Student_Management.git'
+                    url: 'https://github.com/dhiaayadi/Student-Management.git'
             }
         }
 
