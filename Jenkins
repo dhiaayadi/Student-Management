@@ -4,7 +4,7 @@ pipeline {
     environment {
         // --- VARIABLES SONARQUBE ---
         // Le Credential ID est 'devops_sonar', ce qui correspond à votre configuration.
-        SONAR_CREDENTIALS_ID = 'devops_sonar'
+        SONAR_CREDENTIALS_ID = 'sonarqube-token'
         // ---------------------------
         
         // ID du Credential Jenkins pour DockerHub
