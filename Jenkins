@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         // --- VARIABLES SONARQUBE ---
-        // Remplacer 'sonar_login_token' par l'ID de votre credential Jenkins (Secret Text)
+        // Le Credential ID est 'devops_sonar', ce qui correspond à votre configuration.
         SONAR_CREDENTIALS_ID = 'devops_sonar'
         // ---------------------------
         
@@ -15,7 +15,7 @@ pipeline {
     }
 
     tools {
-        // Ces outils doivent être configurés dans 'Gérer Jenkins -> Outils Globaux'
+        // Assurez-vous que ces outils sont configurés dans 'Gérer Jenkins -> Outils Globaux'
         jdk 'jdk17'
         maven 'maven'
     }
@@ -24,7 +24,7 @@ pipeline {
 
         stage('Checkout from GitHub') {
             steps {
-                // CORRIGÉ : Utilisation du trait d'union '-' dans l'URL pour correspondre à GitHub
+                // Utilise le trait d'union '-' dans l'URL (Corrigé, fonctionne dans le log précédent)
                 git branch: 'main',
                     url: 'https://github.com/dhiaayadi/Student-Management.git' 
             }
@@ -32,9 +32,8 @@ pipeline {
 
         stage('Build Maven') {
             steps {
-                // withEnv injecte la variable JAVA_HOME à partir de la configuration globale de 'jdk17'
+                // withEnv est essentiel pour résoudre le problème JAVA_HOME sur Windows
                 withEnv(["JAVA_HOME=${tool 'jdk17'}"]) {
-                    // Utilisation de 'bat' pour exécuter les commandes sur Windows
                     bat 'mvn clean package -DskipTests'
                 }
             }
@@ -42,12 +41,11 @@ pipeline {
         
         stage('Sonar Analysis') {
             steps {
-                // withSonarQubeEnv('SonarQubeServer') : Doit correspondre au nom configuré dans Jenkins
-                withSonarQubeEnv('SonarQubeServer') { 
-                    withCredentials([string(credentialsId: 'devops_sonar', variable: 'SONAR_LOGIN')]) {
+                // CORRECTION CRITIQUE : Utilise le nom de serveur configuré dans Jenkins : 'student_sonar'
+                withSonarQubeEnv('student_sonar') { 
+                    withCredentials([string(credentialsId: "${SONAR_CREDENTIALS_ID}", variable: 'SONAR_LOGIN')]) {
                         withEnv(["JAVA_HOME=${tool 'jdk17'}"]) {
-                            // bat est utilisé pour l'exécution sur Windows
-                            // -Dsonar.login=%SONAR_LOGIN% : Utilise la variable Batch pour le token
+                            // La commande Maven envoie le code à SonarQube
                             bat "mvn clean verify sonar:sonar -Dsonar.projectKey=student -Dsonar.login=%SONAR_LOGIN%"
                         }
                     }
@@ -68,7 +66,6 @@ pipeline {
                     usernameVariable: 'DOCKERHUB_USER',
                     passwordVariable: 'DOCKERHUB_PASS'
                 )]) {
-                    // Les commandes de connexion et de push doivent utiliser 'bat'
                     bat 'echo %DOCKERHUB_PASS% | docker login -u %DOCKERHUB_USER% --password-stdin'
                     bat "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
                 }
