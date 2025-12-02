@@ -9,7 +9,7 @@ import java.util.List;
 
 @Service
 public class EnrollmentService implements IEnrollment {
-    @Autowired
+
     EnrollmentRepository enrollmentRepository;
 
     @Override
