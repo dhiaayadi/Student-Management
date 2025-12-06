@@ -1,89 +1,173 @@
 pipeline {
+
     agent any
 
+
+
     environment {
+
         // --- Variables d'environnement ---
+
         DOCKER_IMAGE = "dhiaayadi/student-management" 
+
         K8S_NAMESPACE = "devops" 
+
         K8S_DEPLOYMENT_FILE = "spring-deployment.yaml" 
+
         
+
         GITHUB_CREDS_ID = "github-creds" 
+
         DOCKER_CREDS_ID = "jenkins_dhia" 
+
         
-        // 🚨 CHEMIN KUBECONFIG WINDOWS CORRECT 🚨
-        // Le chemin Linux '/var/lib/jenkins...' ne marche pas ici.
-        // On utilise le chemin Windows vers le fichier de config de l'utilisateur 'HP'.
-        KUBECONFIG = 'C:/Users/HP/.kube/config'
+
+        // 🚨 CORRECTION DU CHEMIN KUBECONFIG 🚨
+
+        // Utilisation des barres obliques (/) pour une meilleure interprétation par Windows/Jenkins.
+
+        // C'est le chemin vers le fichier de configuration Minikube de l'utilisateur 'HP'.
+
+        KUBECONFIG = '/var/lib/jenkins/.kube/config'
+
     }
+
+
 
     stages {
+
         // ===================================
+
         stage('1. Checkout Code') {
+
             steps {
+
                 echo "Clonage du code depuis GitHub: ${env.DOCKER_IMAGE}"
+
                 git branch: 'main', 
+
                     url: 'https://github.com/dhiaayadi/Student-Management.git',
+
                     credentialsId: "${env.GITHUB_CREDS_ID}" 
+
             }
+
         }
+
         
+
         // ===================================
+
         stage('2. Build Application (Maven)') {
+
             steps {
+
                 echo "Compilation de l'application Spring Boot..."
+
                 bat 'mvn clean package -DskipTests' 
+
             }
+
         }
+
         
+
         // ===================================
+
         stage('3. Build Docker Image') {
+
             steps {
+
                 echo "Construction de l'image Docker avec tag: ${env.BUILD_NUMBER}"
+
                 bat "docker build -t ${DOCKER_IMAGE}:${env.BUILD_NUMBER} ."
+
             }
+
         }
+
         
+
         // ===================================
+
         stage('4. Push Docker Image to Registry') {
+
             steps {
+
                 echo "Authentification et Push vers Docker Hub..."
+
                 withCredentials([usernamePassword(credentialsId: "${env.DOCKER_CREDS_ID}", passwordVariable: 'PASS', usernameVariable: 'USER')]) {
+
                     bat "docker login -u ${USER} -p ${PASS}"
+
                     bat "docker push ${DOCKER_IMAGE}:${env.BUILD_NUMBER}"
+
                 }
+
             }
+
         }
+
         
+
         // ===================================
+
         stage('5. Deploy to Kubernetes') {
+
             steps {
+
                 echo "Déploiement de la version ${env.BUILD_NUMBER} sur le cluster K8s..."
 
+
+
                 // 1. Mise à jour du tag dans le fichier de déploiement YAML
+
                 powershell """
+
                 \$tag = "${DOCKER_IMAGE}:${env.BUILD_NUMBER}"
+
                 \$file = "${K8S_DEPLOYMENT_FILE}"
+
                 (Get-Content \$file) -replace ('${DOCKER_IMAGE}:.*', \$tag) | Set-Content \$file
+
                 """
+
                 
+
                 // 2. Application du nouveau déploiement
+
+                // La variable KUBECONFIG corrige l'authentification
+
                 bat "kubectl apply -f ${K8S_DEPLOYMENT_FILE} -n ${K8S_NAMESPACE}"
+
                 
+
                 // 3. Vérification du Rollout (attend la stabilité)
+
                 bat "kubectl rollout status deployment/spring-app -n ${K8S_NAMESPACE}"
+
             }
+
         }
+
     }
+
     
+
     post {
+
         always {
-            // 🚨 Vérification finale (Correspondance Atelier Page 21) 🚨
-            echo "Vérification de l'état du cluster après déploiement :"
-            bat "kubectl get pods -n ${K8S_NAMESPACE}"
+
             echo 'Nettoyage des ressources du pipeline.'
+
         }
+
         failure {
+
             echo 'Le pipeline a échoué. Vérifiez les logs.'
+
         }
+
     }
+
 }
