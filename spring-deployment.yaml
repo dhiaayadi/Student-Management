@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spring-app
+  labels:
+    app: student-management
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: student-management
+  template:
+    metadata:
+      labels:
+        app: student-management
+    spec:
+      containers:
+      - name: student-management-app
+        # ⚠️ Le tag 'latest' ou 'placeholder' sera remplacé par Jenkins
+        image: dhiaayadi/student-management:latest 
+        ports:
+        - containerPort: 8080 # Port interne de l'application Spring Boot
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spring-service
+spec:
+  type: NodePort
+  selector:
+    app: student-management
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080
