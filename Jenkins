@@ -1,173 +1,99 @@
 pipeline {
+    // Configuration de l'agent : s'exécute sur n'importe quel agent (machine Jenkins)
+    agent any 
 
-    agent any
-
-
-
+    // Variables d'environnement utilisées dans les étapes
     environment {
-
-        // --- Variables d'environnement ---
-
-        DOCKER_IMAGE = "dhiaayadi/student-management" 
-
-        K8S_NAMESPACE = "devops" 
-
-        K8S_DEPLOYMENT_FILE = "spring-deployment.yaml" 
-
+        // Nom complet de l'image Docker (votre compte Docker Hub)
+        DOCKER_IMAGE = "dhiaayadi/dhiaayadii" 
         
-
-        GITHUB_CREDS_ID = "github-creds" 
-
-        DOCKER_CREDS_ID = "jenkins_dhia" 
-
+        // Nom du Deployment Kubernetes cible (défini dans spring-deployment.yaml)
+        K8S_DEPLOYMENT_NAME = "spring-deployment" 
         
-
-        // 🚨 CORRECTION DU CHEMIN KUBECONFIG 🚨
-
-        // Utilisation des barres obliques (/) pour une meilleure interprétation par Windows/Jenkins.
-
-        // C'est le chemin vers le fichier de configuration Minikube de l'utilisateur 'HP'.
-
-        KUBECONFIG = '/var/lib/jenkins/.kube/config'
-
+        // Namespace Kubernetes
+        NAMESPACE = "devops"
+        
+        // ID de l'identifiant Docker Hub stocké dans Jenkins
+        DOCKER_CREDENTIALS_ID = "docker-hub-credentials" 
     }
-
-
 
     stages {
-
-        // ===================================
-
+        // Étape 1 : Récupération du code source
         stage('1. Checkout Code') {
-
             steps {
-
-                echo "Clonage du code depuis GitHub: ${env.DOCKER_IMAGE}"
-
-                git branch: 'main', 
-
-                    url: 'https://github.com/dhiaayadi/Student-Management.git',
-
-                    credentialsId: "${env.GITHUB_CREDS_ID}" 
-
+                echo "--> Étape 1 : Récupération du code depuis Git."
+                // 'scm' est une variable Jenkins qui fait référence à la configuration SCM du job
+                checkout scm
             }
-
         }
 
-        
-
-        // ===================================
-
-        stage('2. Build Application (Maven)') {
-
+        // Étape 2 : Compilation et Tests (avec Maven)
+        stage('2. Build & Package') {
             steps {
-
-                echo "Compilation de l'application Spring Boot..."
-
-                bat 'mvn clean package -DskipTests' 
-
+                echo "--> Étape 2 : Compilation du projet Spring Boot."
+                // Nettoie et package l'application dans un JAR/WAR, en ignorant les tests pour aller plus vite
+                sh 'mvn clean package -DskipTests' 
             }
-
         }
 
-        
-
-        // ===================================
-
-        stage('3. Build Docker Image') {
-
+        // Étape 3 : Dockerisation et Push
+        stage('3. Docker Build & Push') {
             steps {
+                script {
+                    // Tag dynamique utilisant le numéro de Build Jenkins
+                    def imageTag = "${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
+                    
+                    echo "Construction de l'image Docker avec le tag : ${imageTag}"
+                    // Construit l'image Docker à l'aide du Dockerfile présent dans le répertoire de travail
+                    sh "docker build -t ${imageTag} ."
 
-                echo "Construction de l'image Docker avec tag: ${env.BUILD_NUMBER}"
-
-                bat "docker build -t ${DOCKER_IMAGE}:${env.BUILD_NUMBER} ."
-
-            }
-
-        }
-
-        
-
-        // ===================================
-
-        stage('4. Push Docker Image to Registry') {
-
-            steps {
-
-                echo "Authentification et Push vers Docker Hub..."
-
-                withCredentials([usernamePassword(credentialsId: "${env.DOCKER_CREDS_ID}", passwordVariable: 'PASS', usernameVariable: 'USER')]) {
-
-                    bat "docker login -u ${USER} -p ${PASS}"
-
-                    bat "docker push ${DOCKER_IMAGE}:${env.BUILD_NUMBER}"
-
+                    // Utilise les identifiants stockés dans Jenkins pour la connexion
+                    withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
+                        echo "Connexion et Push vers Docker Hub..."
+                        
+                        // Connexion
+                        sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
+                        
+                        // Push de l'image taguée
+                        sh "docker push ${imageTag}"
+                    }
                 }
-
             }
-
         }
 
-        
-
-        // ===================================
-
-        stage('5. Deploy to Kubernetes') {
-
+        // Étape 4 : Déploiement sur Kubernetes
+        stage('4. Deploy to Kubernetes') {
             steps {
+                script {
+                    def imageTag = "${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
+                    echo "--> Étape 4 : Déploiement sur Kubernetes de la version ${env.BUILD_NUMBER}."
 
-                echo "Déploiement de la version ${env.BUILD_NUMBER} sur le cluster K8s..."
+                    // Commande essentielle : met à jour le Deployment K8s avec la nouvelle image
+                    // kubectl set image ... est la manière la plus propre de forcer un "rollout"
+                    sh "kubectl set image deployment/${env.K8S_DEPLOYMENT_NAME} spring-container=${imageTag} -n ${env.NAMESPACE}"
+                    
+                    echo "Déploiement initié. Attente de la stabilisation..."
 
-
-
-                // 1. Mise à jour du tag dans le fichier de déploiement YAML
-
-                powershell """
-
-                \$tag = "${DOCKER_IMAGE}:${env.BUILD_NUMBER}"
-
-                \$file = "${K8S_DEPLOYMENT_FILE}"
-
-                (Get-Content \$file) -replace ('${DOCKER_IMAGE}:.*', \$tag) | Set-Content \$file
-
-                """
-
-                
-
-                // 2. Application du nouveau déploiement
-
-                // La variable KUBECONFIG corrige l'authentification
-
-                bat "kubectl apply -f ${K8S_DEPLOYMENT_FILE} -n ${K8S_NAMESPACE}"
-
-                
-
-                // 3. Vérification du Rollout (attend la stabilité)
-
-                bat "kubectl rollout status deployment/spring-app -n ${K8S_NAMESPACE}"
-
+                    // Vérifie que le déploiement est stable (nouveaux pods démarrés et anciens arrêtés)
+                    sh "kubectl rollout status deployment/${env.K8S_DEPLOYMENT_NAME} -n ${env.NAMESPACE} --timeout=5m"
+                    
+                    echo "Déploiement réussi. Nouvelle version en ligne."
+                }
             }
-
         }
-
     }
-
     
-
+    // Actions post-build (à la fin du pipeline)
     post {
-
         always {
-
-            echo 'Nettoyage des ressources du pipeline.'
-
+            // Afficher le statut du pipeline dans les logs
+            echo "Pipeline terminé avec le statut : ${currentBuild.result}"
         }
-
+        success {
+            echo "CI/CD SUCCESS : Le déploiement est en ligne !"
+        }
         failure {
-
-            echo 'Le pipeline a échoué. Vérifiez les logs.'
-
+            echo "CI/CD FAILURE : Veuillez vérifier les logs des étapes Docker ou Kubernetes."
         }
-
     }
-
 }
