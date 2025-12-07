@@ -1,19 +1,21 @@
+/**
+ * Jenkinsfile final pour l'Atelier CI/CD Kubernetes / Spring Boot.
+ * Inclut le correctif 'withEnv' pour les problèmes de permission kubectl/Minikube sous WSL.
+ */
 pipeline {
-    // Configuration de l'agent : s'exécute sur n'importe quel agent (machine Jenkins)
     agent any 
 
-    // Variables d'environnement utilisées dans les étapes
     environment {
         // Nom complet de l'image Docker (votre compte Docker Hub)
         DOCKER_IMAGE = "dhiaayadi/dhiaayadii" 
         
-        // Nom du Deployment Kubernetes cible (défini dans spring-deployment.yaml)
+        // Nom du Deployment Kubernetes cible
         K8S_DEPLOYMENT_NAME = "spring-deployment" 
         
         // Namespace Kubernetes
         NAMESPACE = "devops"
         
-        // ID de l'identifiant Docker Hub stocké dans Jenkins
+        // ID de l'identifiant Docker Hub stocké dans Jenkins (à vérifier dans Manage Credentials)
         DOCKER_CREDENTIALS_ID = "docker-hub-credentials" 
     }
 
@@ -22,7 +24,6 @@ pipeline {
         stage('1. Checkout Code') {
             steps {
                 echo "--> Étape 1 : Récupération du code depuis Git."
-                // 'scm' est une variable Jenkins qui fait référence à la configuration SCM du job
                 checkout scm
             }
         }
@@ -31,7 +32,6 @@ pipeline {
         stage('2. Build & Package') {
             steps {
                 echo "--> Étape 2 : Compilation du projet Spring Boot."
-                // Nettoie et package l'application dans un JAR/WAR, en ignorant les tests pour aller plus vite
                 sh 'mvn clean package -DskipTests' 
             }
         }
@@ -40,42 +40,41 @@ pipeline {
         stage('3. Docker Build & Push') {
             steps {
                 script {
-                    // Tag dynamique utilisant le numéro de Build Jenkins
                     def imageTag = "${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
                     
                     echo "Construction de l'image Docker avec le tag : ${imageTag}"
-                    // Construit l'image Docker à l'aide du Dockerfile présent dans le répertoire de travail
                     sh "docker build -t ${imageTag} ."
 
-                    // Utilise les identifiants stockés dans Jenkins pour la connexion
+                    // Utilise les identifiants stockés dans Jenkins pour se connecter à Docker Hub
                     withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, passwordVariable: 'DOCKER_PASSWORD', usernameVariable: 'DOCKER_USERNAME')]) {
                         echo "Connexion et Push vers Docker Hub..."
                         
-                        // Connexion
                         sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
                         
-                        // Push de l'image taguée
                         sh "docker push ${imageTag}"
                     }
                 }
             }
         }
 
-        // Étape 4 : Déploiement sur Kubernetes
+        // Étape 4 : Déploiement sur Kubernetes (avec correctif Kubeconfig)
         stage('4. Deploy to Kubernetes') {
             steps {
                 script {
                     def imageTag = "${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
                     echo "--> Étape 4 : Déploiement sur Kubernetes de la version ${env.BUILD_NUMBER}."
 
-                    // Commande essentielle : met à jour le Deployment K8s avec la nouvelle image
-                    // kubectl set image ... est la manière la plus propre de forcer un "rollout"
-                    sh "kubectl set image deployment/${env.K8S_DEPLOYMENT_NAME} spring-container=${imageTag} -n ${env.NAMESPACE}"
-                    
-                    echo "Déploiement initié. Attente de la stabilisation..."
+                    // 🛠️ CORRECTIF WSL/PERMISSIONS : Force l'utilisation du fichier kubeconfig de Jenkins
+                    withEnv(["KUBECONFIG=/var/lib/jenkins/.kube/config"]) { 
+                        
+                        // Met à jour le Deployment K8s avec la nouvelle image taguée
+                        sh "kubectl set image deployment/${env.K8S_DEPLOYMENT_NAME} spring-container=${imageTag} -n ${env.NAMESPACE}"
+                        
+                        echo "Déploiement initié. Attente de la stabilisation..."
 
-                    // Vérifie que le déploiement est stable (nouveaux pods démarrés et anciens arrêtés)
-                    sh "kubectl rollout status deployment/${env.K8S_DEPLOYMENT_NAME} -n ${env.NAMESPACE} --timeout=5m"
+                        // Attend que tous les Pods soient prêts (rolling update terminé)
+                        sh "kubectl rollout status deployment/${env.K8S_DEPLOYMENT_NAME} -n ${env.NAMESPACE} --timeout=5m"
+                    }
                     
                     echo "Déploiement réussi. Nouvelle version en ligne."
                 }
@@ -83,17 +82,15 @@ pipeline {
         }
     }
     
-    // Actions post-build (à la fin du pipeline)
     post {
         always {
-            // Afficher le statut du pipeline dans les logs
             echo "Pipeline terminé avec le statut : ${currentBuild.result}"
         }
         success {
-            echo "CI/CD SUCCESS : Le déploiement est en ligne !"
+            echo "✅ CI/CD SUCCESS : L'application est en ligne sur Kubernetes !"
         }
         failure {
-            echo "CI/CD FAILURE : Veuillez vérifier les logs des étapes Docker ou Kubernetes."
+            echo "❌ CI/CD FAILURE : Veuillez vérifier les logs. L'étape échouée est : ${currentBuild.stage.name}"
         }
     }
 }
