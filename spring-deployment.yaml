@@ -1,31 +1,16 @@
-# spring-deployment.yaml
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: mysql-secret
-  namespace: devops
-type: Opaque
-data:
-  MYSQL_PASSWORD: c3R1ZGVudHBhc3M=      # studentpass
-  MYSQL_ROOT_PASSWORD: cm9vdHBhc3N3b3Jk # rootpassword
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: mysql-config
-  namespace: devops
-data:
-  MYSQL_URL: "jdbc:mysql://mysql-service:3306/studentdb?useSSL=false&allowPublicKeyRetrieval=true"
-  MYSQL_USER: "studentuser"
----
+# ------------------------------------------------
+# PARTIE 1 : Deployment
+# Définit comment déployer l'image Docker de votre application Spring Boot.
+# ------------------------------------------------
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: spring-app
+  name: spring-deployment
   namespace: devops
+  labels:
+    app: spring-app
 spec:
-  replicas: 2
+  replicas: 2 # Nombre de réplicas (pour la haute disponibilité)
   selector:
     matchLabels:
       app: spring-app
@@ -35,39 +20,37 @@ spec:
         app: spring-app
     spec:
       containers:
-      - name: spring-app
-        image: bilelkhabthani/student-management:latest
-        imagePullPolicy: Always
+      - name: spring-container
+        # 🚨 Remplacer par l'image que votre pipeline Jenkins va construire et pousser
+        image: dhiaayadi/dhiaayadii:latest 
         ports:
-        - containerPort: 8089
+        - containerPort: 8080 # Le port sur lequel votre application Spring écoute
         env:
+        # Configuration de la connexion à la base de données (MySQL)
         - name: SPRING_DATASOURCE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: mysql-config
-              key: MYSQL_URL
+          # Utilise le nom du Service MySQL (mysql-service) comme hôte
+          value: "jdbc:mysql://mysql-service:3306/workshop_db"
         - name: SPRING_DATASOURCE_USERNAME
-          valueFrom:
-            configMapKeyRef:
-              name: mysql-config
-              key: MYSQL_USER
+          value: "app_user"
         - name: SPRING_DATASOURCE_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: mysql-secret
-              key: MYSQL_PASSWORD
-        - name: SPRING_JPA_HIBERNATE_DDL_AUTO
-          value: "update"
+          value: "app_password_secret" # Doit correspondre à la valeur dans mysql-deployment.yaml
 ---
+# ------------------------------------------------
+# PARTIE 2 : Service (NodePort)
+# Crée un point d'accès externe pour l'application.
+# ------------------------------------------------
 apiVersion: v1
 kind: Service
 metadata:
   name: spring-service
   namespace: devops
-spec:
-  type: NodePort
-  selector:
+  labels:
     app: spring-app
+spec:
   ports:
-    - port: 8089
-      targetPort: 8089
+    - port: 80 # Port standard pour l'accès
+      targetPort: 8080 # Port du conteneur Spring Boot
+      # nodePort: 30000-32767 # Minikube assignera un NodePort dans cette plage
+  selector:
+    app: spring-app # Cible les Pods avec le label app: spring-app
+  type: NodePort # Expose le service sur un port de la machine hôte (via minikube service)
