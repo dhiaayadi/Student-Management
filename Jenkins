@@ -15,7 +15,7 @@ pipeline {
         stage('Git Checkout') {
             steps {
                 echo '📥 Pulling source code...'
-                git branch: 'main', url: 'https://github.com/dhiaayadi/Student-Management.git.git'
+                git branch: 'main', url: 'https://github.com/dhiaayadi/Student-Management.git'
             }
         }
 
