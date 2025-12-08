@@ -12,7 +12,7 @@ pipeline {
         K8S_NAMESPACE = 'devops'
         
         // ID des identifiants créés dans Jenkins (Username/Password)
-        DOCKER_CREDENTIALS_ID = 'dockerhub-cred'
+        DOCKER_CREDENTIALS_ID = 'docker-hub-credentials'
         
         // Nom de votre installation SonarQube dans Jenkins (Manage Jenkins -> System)
         SONAR_INSTANCE_NAME = 'SonarQube Server'
