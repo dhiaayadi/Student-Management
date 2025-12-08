@@ -5,7 +5,7 @@ metadata:
   name: spring-config
   namespace: devops
 data:
-  DB_URL: "jdbc:mysql://mysql-service:3306/devopsdb"
+  DB_URL: "jdbc:mysql://mysql-service:3306/studentdb"
 
 ---
 # 2. Secret - Credentials de la base de données (encodé en base64)
