@@ -2,80 +2,60 @@ pipeline {
     agent any
 
     environment {
-        /* ================= CONFIGURATION GLOBALE ================= */
-        
-        // 1. DOCKER
-        // Attention : Mettez le nom exact de votre repo (dhiaayadi ou spring-app selon votre choix)
+        // --- CONFIGURATION ---
         DOCKER_REPO = 'dhiaayadi/spring-app' 
-        
-        // Utilise le numéro de build Jenkins comme tag (ex: 1.0.45)
         IMAGE_TAG = "1.0.${BUILD_NUMBER}"
+        DOCKER_CREDENTIALS_ID = 'docker-hub-credentials' // Vérifiez que cet ID existe dans Jenkins
+
+        // ⚠️ CHEMIN ABSOLU VERS VOTRE FICHIER KUBERNETES
+        // Les doubles backslashes \\ sont obligatoires sur Windows
+        KUBE_PATH = 'C:\\Users\\HP\\.kube\\config'
         
-        // Identifiants Docker Hub dans Jenkins
-        DOCKER_CREDENTIALS_ID = 'docker-hub-credentials'
-
-        // 2. KUBERNETES (LA CORRECTION EST ICI 👇)
-        // Indispensable pour que kubectl trouve votre cluster sur Windows
-        // Notez les doubles backslashes \\
-        KUBECONFIG = 'C:\\Users\\HP\\.kube\\config'
         K8S_NAMESPACE = 'devops'
-
-        // 3. SONARQUBE
         SONAR_INSTANCE_NAME = 'SonarQube Server'
     }
 
     stages {
 
-        /* ---------------------------- 1. GIT CHECKOUT ---------------------------- */
         stage('Git Checkout') {
             steps {
-                echo '📥 Récupération du code source...'
+                echo '📥 Récupération du code...'
                 git branch: 'main', url: 'https://github.com/dhiaayadi/Student-Management.git'
             }
         }
 
-        /* -------------------------- 2. SONARQUBE ANALYSIS -------------------------- */
         stage('SonarQube Analysis') {
             steps {
                 echo '🔎 Analyse SonarQube...'
                 script {
                     try {
                         withSonarQubeEnv(SONAR_INSTANCE_NAME) {
-                            // "mvnw.cmd" est le wrapper Maven pour Windows
                             bat "mvnw.cmd clean verify sonar:sonar -DskipTests -Dsonar.projectKey=student-management -Dsonar.host.url=http://localhost:9000 -Dsonar.login=%SONAR_AUTH_TOKEN%"
                         }
                     } catch (Exception e) {
-                        echo "⚠️ Attention: Analyse SonarQube échouée. Vérifiez que le serveur est lancé."
+                        echo "⚠️ Analyse SonarQube ignorée."
                     }
                 }
             }
         }
 
-        /* ------------------------------ 3. MAVEN BUILD ------------------------------ */
         stage('Maven Build') {
             steps {
-                echo '🛠 Construction du JAR Spring Boot...'
+                echo '🛠 Compilation...'
                 bat 'mvnw.cmd clean package -DskipTests'
-                
-                // Sauvegarde l'artefact pour être sûr qu'il existe pour Docker
                 archiveArtifacts artifacts: 'target/*.jar', allowEmptyArchive: false
             }
         }
 
-        /* --------------------------- 4. DOCKER BUILD & PUSH --------------------------- */
         stage('Docker Build & Push') {
             steps {
-                echo "🐳 Construction de l'image ${DOCKER_REPO}:${IMAGE_TAG}..."
+                echo "🐳 Docker Build & Push..."
                 script {
-                    // Construction
                     bat "docker build -t ${DOCKER_REPO}:${IMAGE_TAG} ."
                     bat "docker tag ${DOCKER_REPO}:${IMAGE_TAG} ${DOCKER_REPO}:latest"
 
-                    // Envoi vers Docker Hub
                     withCredentials([usernamePassword(credentialsId: DOCKER_CREDENTIALS_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        // Login sécurisé
                         bat 'echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin'
-                        // Push
                         bat "docker push ${DOCKER_REPO}:${IMAGE_TAG}"
                         bat "docker push ${DOCKER_REPO}:latest"
                     }
@@ -83,65 +63,55 @@ pipeline {
             }
         }
 
-        /* ------------------------------ 5. KUBERNETES DEPLOY ------------------------------ */
         stage('Kubernetes Deploy') {
             steps {
-                echo '☸️ Déploiement sur Kubernetes...'
+                echo '☸️ Déploiement Kubernetes...'
                 script {
-                    // 1. Test de connexion (Pour vérifier que KUBECONFIG marche)
-                    bat "kubectl config view"
+                    // C'EST ICI QUE LA MAGIE OPÈRE : On force le fichier de config
+                    // On utilise \"%KUBE_PATH%\" pour que Windows lise bien le chemin
+                    
+                    // 1. Création du Namespace
+                    bat "kubectl --kubeconfig \"%KUBE_PATH%\" get namespace ${K8S_NAMESPACE} || kubectl --kubeconfig \"%KUBE_PATH%\" create namespace ${K8S_NAMESPACE}"
 
-                    // 2. Création du Namespace (Syntaxe Windows avec ||)
-                    bat "kubectl get namespace ${K8S_NAMESPACE} || kubectl create namespace ${K8S_NAMESPACE}"
+                    // 2. MySQL
+                    bat "kubectl --kubeconfig \"%KUBE_PATH%\" apply -f k8s/mysql-storage.yaml -n ${K8S_NAMESPACE}"
+                    bat "kubectl --kubeconfig \"%KUBE_PATH%\" apply -f k8s/mysql-deployment.yaml -n ${K8S_NAMESPACE}"
 
-                    // 3. Déploiement MySQL
-                    bat "kubectl apply -f k8s/mysql-storage.yaml -n ${K8S_NAMESPACE}"
-                    bat "kubectl apply -f k8s/mysql-deployment.yaml -n ${K8S_NAMESPACE}"
-
-                    // 4. Mise à jour dynamique de l'image dans le fichier YAML (Script Groovy)
+                    // 3. Mise à jour de l'image dans le YAML via Groovy
                     def configFile = 'k8s/spring-deployment.yaml'
                     if (fileExists(configFile)) {
                         def fileContent = readFile(configFile)
-                        // Remplace l'ancienne image par la nouvelle version créée ci-dessus
                         def newContent = fileContent.replaceAll('image: .*', "image: ${DOCKER_REPO}:${IMAGE_TAG}")
                         writeFile file: configFile, text: newContent
-                        echo "✅ Fichier YAML mis à jour avec l'image : ${DOCKER_REPO}:${IMAGE_TAG}"
-                    } else {
-                        error "❌ ERREUR CRITIQUE : Le fichier ${configFile} est introuvable."
+                        echo "✅ YAML mis à jour avec : ${DOCKER_REPO}:${IMAGE_TAG}"
                     }
 
-                    // 5. Déploiement de l'application Spring
-                    bat "kubectl apply -f k8s/spring-config.yaml -n ${K8S_NAMESPACE}"
-                    bat "kubectl apply -f k8s/spring-deployment.yaml -n ${K8S_NAMESPACE}"
+                    // 4. Déploiement Spring App
+                    bat "kubectl --kubeconfig \"%KUBE_PATH%\" apply -f k8s/spring-config.yaml -n ${K8S_NAMESPACE}"
+                    bat "kubectl --kubeconfig \"%KUBE_PATH%\" apply -f k8s/spring-deployment.yaml -n ${K8S_NAMESPACE}"
 
-                    // 6. Force le redémarrage pour prendre la nouvelle image
-                    bat "kubectl rollout restart deployment/spring-app -n ${K8S_NAMESPACE}"
+                    // 5. Redémarrage propre
+                    bat "kubectl --kubeconfig \"%KUBE_PATH%\" rollout restart deployment/spring-app -n ${K8S_NAMESPACE}"
                     
-                    // 7. Attente que le déploiement soit stable
-                    bat "kubectl rollout status deployment/spring-app -n ${K8S_NAMESPACE} --timeout=2m"
+                    // Pause de 5 secondes pour laisser le temps à K8s de réagir
+                    sleep 5
+                    
+                    // Vérification du statut
+                    bat "kubectl --kubeconfig \"%KUBE_PATH%\" rollout status deployment/spring-app -n ${K8S_NAMESPACE} --timeout=2m"
                 }
             }
         }
 
-        /* ------------------------------ 6. VERIFICATION ------------------------------ */
-        stage('Verify Deployments') {
+        stage('Verify') {
             steps {
-                echo '🔍 Vérification des Pods...'
-                bat "kubectl get pods -n ${K8S_NAMESPACE}"
-                bat "kubectl get svc -n ${K8S_NAMESPACE}"
+                echo '🔍 Vérification...'
+                bat "kubectl --kubeconfig \"%KUBE_PATH%\" get pods -n ${K8S_NAMESPACE}"
+                bat "kubectl --kubeconfig \"%KUBE_PATH%\" get svc -n ${K8S_NAMESPACE}"
             }
         }
     }
-
+    
     post {
-        always {
-            cleanWs() // Nettoyage
-        }
-        success {
-            echo "🎉 SUCCÈS : Application déployée v${IMAGE_TAG} !"
-        }
-        failure {
-            echo "❌ ÉCHEC : Regardez les logs ci-dessus pour comprendre l'erreur."
-        }
+        always { cleanWs() }
     }
 }
