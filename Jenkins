@@ -4,7 +4,7 @@ pipeline {
     environment {
         // --- CONFIGURATION ---
         // Remplacez par votre pseudo DockerHub
-        DOCKER_REPO = 'dhiaayadi/spring-app'
+        DOCKER_REPO = 'dhiaayadi/dhiaayadii'
         
         // Utilise le numéro de build Jenkins comme tag (ex: 1.0.45)
         IMAGE_TAG = "1.0.${BUILD_NUMBER}"
