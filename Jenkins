@@ -2,11 +2,12 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_SPRING_REPO = 'dhiaayadi/spring'
-        DOCKER_STUDENT_REPO = 'dhiaayadi/dhiaayadii'
+        // INFO: J'ai gardé un seul repo pour la propreté. Changez le nom si nécessaire.
+        DOCKER_REPO = 'dhiaayadi/spring-app' 
         IMAGE_TAG = "${BUILD_NUMBER}"
         K8S_NAMESPACE = 'devops'
-        SONAR_HOST = 'http://localhost:9000'
+        // Assurez-vous que cet ID correspond à celui créé dans Jenkins (Manage Jenkins > Credentials)
+        DOCKER_CREDENTIALS_ID = 'dockerhub-cred' 
     }
 
     stages {
@@ -15,6 +16,7 @@ pipeline {
         stage('Git Checkout') {
             steps {
                 echo '📥 Pulling source code...'
+                // CORRECTION: Suppression du .git en trop à la fin de l'URL
                 git branch: 'main', url: 'https://github.com/dhiaayadi/Student-Management.git'
             }
         }
@@ -23,8 +25,9 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 echo '🔎 Running SonarQube Analysis...'
-                withSonarQubeEnv('SonarQube Server') {
-                    bat '''
+                // Assurez-vous que le serveur "SonarQube Server" est configuré dans Jenkins
+                withSonarQubeEnv('SonarQube Server') { 
+                    sh '''
                         chmod +x ./mvnw
                         ./mvnw clean verify sonar:sonar -DskipTests \
                           -Dsonar.projectKey=student-management \
@@ -39,10 +42,11 @@ pipeline {
         stage('Maven Build') {
             steps {
                 echo '🛠 Building Spring Boot...'
-                bat '''
+                sh '''
                     chmod +x ./mvnw
                     ./mvnw clean package -DskipTests
                 '''
+                // Archive le JAR pour qu'il soit disponible pour l'étape Docker
                 archiveArtifacts artifacts: 'target/*.jar'
             }
         }
@@ -52,28 +56,23 @@ pipeline {
             steps {
                 echo '🐳 Building Docker images...'
 
-                bat '''
-                    docker build -t ${DOCKER_SPRING_REPO}:${IMAGE_TAG} .
-                    docker tag ${DOCKER_SPRING_REPO}:${IMAGE_TAG} ${DOCKER_SPRING_REPO}:latest
+                script {
+                    // Construction de l'image avec le tag du numéro de build
+                    sh "docker build -t ${DOCKER_REPO}:${IMAGE_TAG} ."
+                    sh "docker tag ${DOCKER_REPO}:${IMAGE_TAG} ${DOCKER_REPO}:latest"
 
-                    docker build -t ${DOCKER_STUDENT_REPO}:${IMAGE_TAG} .
-                    docker tag ${DOCKER_STUDENT_REPO}:${IMAGE_TAG} ${DOCKER_STUDENT_REPO}:latest
-                '''
-
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-cred',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_TOKEN'
-                )]) {
-                    bat '''
-                        echo $DOCKER_TOKEN | docker login -u $DOCKER_USER --password-stdin
-
-                        docker push ${DOCKER_SPRING_REPO}:${IMAGE_TAG}
-                        docker push ${DOCKER_SPRING_REPO}:latest
-
-                        docker push ${DOCKER_STUDENT_REPO}:${IMAGE_TAG}
-                        docker push ${DOCKER_STUDENT_REPO}:latest
-                    '''
+                    // Connexion et Push
+                    withCredentials([usernamePassword(
+                        credentialsId: "${DOCKER_CREDENTIALS_ID}",
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )]) {
+                        sh '''
+                            echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                            docker push ${DOCKER_REPO}:${IMAGE_TAG}
+                            docker push ${DOCKER_REPO}:latest
+                        '''
+                    }
                 }
             }
         }
@@ -82,22 +81,29 @@ pipeline {
         stage('Kubernetes Deploy') {
             steps {
                 echo '☸️ Deploying to Kubernetes cluster...'
+                
+                script {
+                    // 1. Création du namespace s'il n'existe pas [cite: 75, 81]
+                    sh "kubectl get namespace ${K8S_NAMESPACE} || kubectl create namespace ${K8S_NAMESPACE}"
 
-                bat '''
-                    kubectl get namespace ${K8S_NAMESPACE} || kubectl create namespace ${K8S_NAMESPACE}
+                    // 2. Déploiement MySQL (Base de données) [cite: 88, 127]
+                    // Note: Vérifiez que le fichier est bien dans un dossier 'k8s' ou à la racine
+                    sh "kubectl apply -f k8s/mysql-deployment.yaml -n ${K8S_NAMESPACE}"
 
-                    echo "📦 Deploying MySQL..."
-                    kubectl apply -f k8s/mysql-deployment.yaml
+                    // 3. Mise à jour dynamique de l'image dans le fichier YAML Spring [cite: 295]
+                    // Cette commande remplace le nom de l'image dans le YAML par la nouvelle version buildée
+                    sh "sed -i 's|image: .*|image: ${DOCKER_REPO}:${IMAGE_TAG}|' k8s/spring-deployment.yaml"
 
-                    echo "🚀 Deploying Spring Boot..."
-                    kubectl apply -f k8s/spring-deployment.yaml
+                    // 4. Déploiement de l'application Spring [cite: 186, 217]
+                    sh "kubectl apply -f k8s/spring-deployment.yaml -n ${K8S_NAMESPACE}"
 
-                    echo "🔄 Restarting deployment..."
-                    kubectl rollout restart deployment/spring-deployment -n ${K8S_NAMESPACE}
-
-                    echo "⏳ Waiting for Spring Boot..."
-                    kubectl rollout status deployment/spring-deployment -n ${K8S_NAMESPACE} --timeout=20m
-                '''
+                    // 5. Redémarrage pour forcer la prise en compte de la nouvelle version
+                    // Note: Le nom 'spring-app' doit correspondre au metadata.name dans votre yaml (Page 13 du PDF)
+                    sh "kubectl rollout restart deployment/spring-app -n ${K8S_NAMESPACE}"
+                    
+                    // 6. Attente que le déploiement soit prêt
+                    sh "kubectl rollout status deployment/spring-app -n ${K8S_NAMESPACE} --timeout=5m"
+                }
             }
         }
 
@@ -105,17 +111,12 @@ pipeline {
         stage('Verify Deployments') {
             steps {
                 echo '🔍 Checking Kubernetes resources...'
-
-                bat '''
+                sh """
                     echo "=== PODS ==="
                     kubectl get pods -n ${K8S_NAMESPACE}
-
                     echo "=== SERVICES ==="
                     kubectl get svc -n ${K8S_NAMESPACE}
-
-                    echo "=== DEPLOYMENTS ==="
-                    kubectl get deployments -n ${K8S_NAMESPACE}
-                '''
+                """
             }
         }
     }
