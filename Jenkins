@@ -24,7 +24,7 @@ pipeline {
             steps {
                 echo '🔎 Running SonarQube Analysis...'
                 withSonarQubeEnv('SonarQube Server') {
-                    sh '''
+                    bat '''
                         chmod +x ./mvnw
                         ./mvnw clean verify sonar:sonar -DskipTests \
                           -Dsonar.projectKey=student-management \
@@ -39,7 +39,7 @@ pipeline {
         stage('Maven Build') {
             steps {
                 echo '🛠 Building Spring Boot...'
-                sh '''
+                bat '''
                     chmod +x ./mvnw
                     ./mvnw clean package -DskipTests
                 '''
@@ -52,7 +52,7 @@ pipeline {
             steps {
                 echo '🐳 Building Docker images...'
 
-                sh '''
+                bat '''
                     docker build -t ${DOCKER_SPRING_REPO}:${IMAGE_TAG} .
                     docker tag ${DOCKER_SPRING_REPO}:${IMAGE_TAG} ${DOCKER_SPRING_REPO}:latest
 
@@ -65,7 +65,7 @@ pipeline {
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_TOKEN'
                 )]) {
-                    sh '''
+                    bat '''
                         echo $DOCKER_TOKEN | docker login -u $DOCKER_USER --password-stdin
 
                         docker push ${DOCKER_SPRING_REPO}:${IMAGE_TAG}
@@ -83,7 +83,7 @@ pipeline {
             steps {
                 echo '☸️ Deploying to Kubernetes cluster...'
 
-                sh '''
+                bat '''
                     kubectl get namespace ${K8S_NAMESPACE} || kubectl create namespace ${K8S_NAMESPACE}
 
                     echo "📦 Deploying MySQL..."
@@ -106,7 +106,7 @@ pipeline {
             steps {
                 echo '🔍 Checking Kubernetes resources...'
 
-                sh '''
+                bat '''
                     echo "=== PODS ==="
                     kubectl get pods -n ${K8S_NAMESPACE}
 
