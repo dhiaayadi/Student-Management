@@ -1,0 +1,78 @@
+# ------------------------------------------------
+# PARTIE 1 : Persistent Volume Claim (PVC)
+# Crée un espace de stockage persistant pour les données MySQL.
+# ------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: devops # Important : Mettre dans le namespace devops
+spec:
+  accessModes:
+    - ReadWriteOnce # Le volume peut être monté en lecture/écriture par un seul nœud
+  resources:
+    requests:
+      storage: 5Gi # Taille du stockage demandé (ajustez si besoin)
+---
+# ------------------------------------------------
+# PARTIE 2 : Deployment
+# Définit comment le conteneur MySQL doit être déployé.
+# ------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-deployment
+  namespace: devops
+  labels:
+    app: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql-container
+        image: mysql:5.7 # Image MySQL standard (vous pouvez choisir une autre version)
+        ports:
+        - containerPort: 3306
+        env:
+        # Variables d'environnement pour configurer MySQL
+        - name: MYSQL_ROOT_PASSWORD
+          value: "root_password_secret" # À remplacer ou utiliser un Secret Kubernetes
+        - name: MYSQL_DATABASE
+          value: "workshop_db"
+        - name: MYSQL_USER
+          value: "app_user"
+        - name: MYSQL_PASSWORD
+          value: "app_password_secret" # À remplacer ou utiliser un Secret Kubernetes
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql # Chemin où MySQL stocke ses données
+      volumes:
+      - name: mysql-persistent-storage
+        persistentVolumeClaim:
+          claimName: mysql-pvc # Référence au PVC créé en PARTIE 1
+---
+# ------------------------------------------------
+# PARTIE 3 : Service (ClusterIP)
+# Crée un point d'accès stable pour les autres Pods du cluster (l'application Spring Boot).
+# ------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service
+  namespace: devops
+  labels:
+    app: mysql
+spec:
+  ports:
+    - port: 3306 # Port du Service
+      targetPort: 3306 # Port du conteneur
+  selector:
+    app: mysql # Cible les Pods avec le label app: mysql
+  type: ClusterIP # Accès uniquement interne au cluster
