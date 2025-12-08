@@ -1,94 +1,74 @@
 pipeline {
-    agent any 
+    agent any
 
     environment {
-        // Nom complet de l'image Docker (Docker Hub)
-        DOCKER_IMAGE = "dhiaayadi/dhiaayadii" 
+        // --- VARIABLES SONARQUBE ---
+        // Le Credential ID est 'devops_sonar', ce qui correspond à votre configuration.
+        SONAR_CREDENTIALS_ID = 'devops_sonar'
+        // ---------------------------
         
-        // Nom du Deployment Kubernetes cible
-        K8S_DEPLOYMENT_NAME = "spring-deployment" 
-        
-        // Namespace Kubernetes
-        NAMESPACE = "devops"
-        
-        // Credentials Docker Hub (à configurer dans Jenkins)
-        DOCKER_CREDENTIALS_ID = "docker-hub-credentials" 
+        // ID du Credential Jenkins pour DockerHub
+        DOCKERHUB_CREDENTIALS = 'jenkins_dhia'
+        // Nom de l'image Docker
+        IMAGE_NAME = "dhiaayadi/student"
+        IMAGE_TAG = "latest"
+    }
+
+    tools {
+        // Assurez-vous que ces outils sont configurés dans 'Gérer Jenkins -> Outils Globaux'
+        jdk 'jdk17'
+        maven 'maven'
     }
 
     stages {
-        // Étape 1 : Récupération du code
-        stage('1. Checkout Code') {
+
+        stage('Checkout from GitHub') {
             steps {
-                echo "--> Récupération du code depuis Git"
-                checkout scm
+                // Utilise le trait d'union '-' dans l'URL (Corrigé, fonctionne dans le log précédent)
+                git branch: 'main',
+                    url: 'https://github.com/dhiaayadi/Student-Management.git' 
             }
         }
 
-        // Étape 2 : Compilation et package Maven
-        stage('2. Build & Package') {
+        stage('Build Maven') {
             steps {
-                echo "--> Compilation du projet Spring Boot"
-                sh 'mvn clean package -DskipTests'
-            }
-        }
-
-        // Étape 3 : Dockerisation et Push
-        stage('3. Docker Build & Push') {
-            steps {
-                script {
-                    def imageTag = "${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
-                    
-                    echo "Construction de l'image Docker : ${imageTag}"
-                    sh "docker build -t ${imageTag} ."
-
-                    withCredentials([usernamePassword(
-                        credentialsId: env.DOCKER_CREDENTIALS_ID, 
-                        passwordVariable: 'DOCKER_PASSWORD', 
-                        usernameVariable: 'DOCKER_USERNAME')]) {
-                        
-                        echo "Connexion à Docker Hub..."
-                        sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
-                        sh "docker push ${imageTag}"
-                    }
+                // withEnv est essentiel pour résoudre le problème JAVA_HOME sur Windows
+                withEnv(["JAVA_HOME=${tool 'jdk17'}"]) {
+                    bat 'mvn clean package -DskipTests'
                 }
             }
         }
-
-        // Étape 4 : Déploiement sur Kubernetes
-        stage('4. Deploy to Kubernetes') {
-            steps {
-                script {
-                    def imageTag = "${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
-                    echo "--> Déploiement K8s de la version ${env.BUILD_NUMBER}"
-
-                    // Correctif WSL / Permissions
-                    withEnv(["KUBECONFIG=/var/lib/jenkins/.kube/config"]) { 
-                        
-                        // Met à jour l'image du Deployment
-                        sh """
-                            kubectl set image deployment/${env.K8S_DEPLOYMENT_NAME} \
-                            spring-container=${imageTag} -n ${env.NAMESPACE}
-                        """
-
-                        echo "Attente de la stabilisation des pods..."
-                        sh "kubectl rollout status deployment/${env.K8S_DEPLOYMENT_NAME} -n ${env.NAMESPACE} --timeout=5m"
-                    }
-
-                    echo "Déploiement terminé ✅"
+        
+       stage('Sonar Analysis') {
+    steps {
+        withSonarQubeEnv('student_sonar') {
+            withCredentials([string(credentialsId: "${SONAR_CREDENTIALS_ID}", variable: 'SONAR_LOGIN')]) {
+                withEnv(["JAVA_HOME=${tool 'jdk17'}"]) {
+                    // Ajout de -DskipTests
+                    bat "mvn clean verify sonar:sonar -Dsonar.projectKey=student -Dsonar.login=%SONAR_LOGIN% -DskipTests"
                 }
             }
         }
     }
+}
 
-    post {
-        always {
-            echo "Pipeline terminé avec le statut : ${currentBuild.result ?: 'SUCCESS'}"
+        stage('Build Docker Image') {
+            steps {
+                bat "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
+            }
         }
-        success {
-            echo "✅ CI/CD SUCCESS : L'application est en ligne sur Kubernetes !"
-        }
-        failure {
-            echo "❌ CI/CD FAILURE : Vérifiez les logs. Étape échouée : ${currentBuild.stageName}"
+
+        stage('Push Docker Image') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: "${DOCKERHUB_CREDENTIALS}",
+                    usernameVariable: 'DOCKERHUB_USER',
+                    passwordVariable: 'DOCKERHUB_PASS'
+                )]) {
+                    bat 'echo %DOCKERHUB_PASS% | docker login -u %DOCKERHUB_USER% --password-stdin'
+                    bat "docker push ${IMAGE_NAME}:${IMAGE_TAG}"
+                }
+            }
         }
     }
 }
