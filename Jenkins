@@ -1,94 +1,134 @@
 pipeline {
-    agent any 
+    agent any
 
     environment {
-        // Nom complet de l'image Docker (Docker Hub)
-        DOCKER_IMAGE = "dhiaayadi/dhiaayadii" 
-        
-        // Nom du Deployment Kubernetes cible
-        K8S_DEPLOYMENT_NAME = "spring-deployment" 
-        
-        // Namespace Kubernetes
-        NAMESPACE = "devops"
-        
-        // Credentials Docker Hub (à configurer dans Jenkins)
-        DOCKER_CREDENTIALS_ID = "docker-hub-credentials" 
+        DOCKER_SPRING_REPO = 'dhiaayadi/spring'
+        DOCKER_STUDENT_REPO = 'dhiaayadi/dhiaayadii'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        K8S_NAMESPACE = 'devops'
+        SONAR_HOST = 'http://localhost:9000'
     }
 
     stages {
-        // Étape 1 : Récupération du code
-        stage('1. Checkout Code') {
+
+        /* ---------------------------- GIT CHECKOUT ---------------------------- */
+        stage('Git Checkout') {
             steps {
-                echo "--> Récupération du code depuis Git"
-                checkout scm
+                echo '📥 Pulling source code...'
+                git branch: 'main', url: 'https://github.com/dhiaayadi/Student-Management.git.git'
             }
         }
 
-        // Étape 2 : Compilation et package Maven
-        stage('2. Build & Package') {
+        /* -------------------------- SONARQUBE ANALYSIS -------------------------- */
+        stage('SonarQube Analysis') {
             steps {
-                echo "--> Compilation du projet Spring Boot"
-                sh 'mvn clean package -DskipTests'
-            }
-        }
-
-        // Étape 3 : Dockerisation et Push
-        stage('3. Docker Build & Push') {
-            steps {
-                script {
-                    def imageTag = "${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
-                    
-                    echo "Construction de l'image Docker : ${imageTag}"
-                    sh "docker build -t ${imageTag} ."
-
-                    withCredentials([usernamePassword(
-                        credentialsId: env.DOCKER_CREDENTIALS_ID, 
-                        passwordVariable: 'DOCKER_PASSWORD', 
-                        usernameVariable: 'DOCKER_USERNAME')]) {
-                        
-                        echo "Connexion à Docker Hub..."
-                        sh "docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}"
-                        sh "docker push ${imageTag}"
-                    }
+                echo '🔎 Running SonarQube Analysis...'
+                withSonarQubeEnv('SonarQube Server') {
+                    sh '''
+                        chmod +x ./mvnw
+                        ./mvnw clean verify sonar:sonar -DskipTests \
+                          -Dsonar.projectKey=student-management \
+                          -Dsonar.host.url=http://localhost:9000 \
+                          -Dsonar.login=${SONAR_TOKEN}
+                    '''
                 }
             }
         }
 
-        // Étape 4 : Déploiement sur Kubernetes
-        stage('4. Deploy to Kubernetes') {
+        /* ------------------------------ MAVEN BUILD ------------------------------ */
+        stage('Maven Build') {
             steps {
-                script {
-                    def imageTag = "${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
-                    echo "--> Déploiement K8s de la version ${env.BUILD_NUMBER}"
+                echo '🛠 Building Spring Boot...'
+                sh '''
+                    chmod +x ./mvnw
+                    ./mvnw clean package -DskipTests
+                '''
+                archiveArtifacts artifacts: 'target/*.jar'
+            }
+        }
 
-                    // Correctif WSL / Permissions
-                    withEnv(["KUBECONFIG=/var/lib/jenkins/.kube/config"]) { 
-                        
-                        // Met à jour l'image du Deployment
-                        sh """
-                            kubectl set image deployment/${env.K8S_DEPLOYMENT_NAME} \
-                            spring-container=${imageTag} -n ${env.NAMESPACE}
-                        """
+        /* --------------------------- DOCKER BUILD/PUSH --------------------------- */
+        stage('Docker Build & Push') {
+            steps {
+                echo '🐳 Building Docker images...'
 
-                        echo "Attente de la stabilisation des pods..."
-                        sh "kubectl rollout status deployment/${env.K8S_DEPLOYMENT_NAME} -n ${env.NAMESPACE} --timeout=5m"
-                    }
+                sh '''
+                    docker build -t ${DOCKER_SPRING_REPO}:${IMAGE_TAG} .
+                    docker tag ${DOCKER_SPRING_REPO}:${IMAGE_TAG} ${DOCKER_SPRING_REPO}:latest
 
-                    echo "Déploiement terminé ✅"
+                    docker build -t ${DOCKER_STUDENT_REPO}:${IMAGE_TAG} .
+                    docker tag ${DOCKER_STUDENT_REPO}:${IMAGE_TAG} ${DOCKER_STUDENT_REPO}:latest
+                '''
+
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-cred',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_TOKEN'
+                )]) {
+                    sh '''
+                        echo $DOCKER_TOKEN | docker login -u $DOCKER_USER --password-stdin
+
+                        docker push ${DOCKER_SPRING_REPO}:${IMAGE_TAG}
+                        docker push ${DOCKER_SPRING_REPO}:latest
+
+                        docker push ${DOCKER_STUDENT_REPO}:${IMAGE_TAG}
+                        docker push ${DOCKER_STUDENT_REPO}:latest
+                    '''
                 }
+            }
+        }
+
+        /* ------------------------------ K8S DEPLOYMENT ------------------------------ */
+        stage('Kubernetes Deploy') {
+            steps {
+                echo '☸️ Deploying to Kubernetes cluster...'
+
+                sh '''
+                    kubectl get namespace ${K8S_NAMESPACE} || kubectl create namespace ${K8S_NAMESPACE}
+
+                    echo "📦 Deploying MySQL..."
+                    kubectl apply -f k8s/mysql-deployment.yaml
+
+                    echo "🚀 Deploying Spring Boot..."
+                    kubectl apply -f k8s/spring-deployment.yaml
+
+                    echo "🔄 Restarting deployment..."
+                    kubectl rollout restart deployment/spring-deployment -n ${K8S_NAMESPACE}
+
+                    echo "⏳ Waiting for Spring Boot..."
+                    kubectl rollout status deployment/spring-deployment -n ${K8S_NAMESPACE} --timeout=20m
+                '''
+            }
+        }
+
+        /* ------------------------------ DEPLOY CHECK ------------------------------ */
+        stage('Verify Deployments') {
+            steps {
+                echo '🔍 Checking Kubernetes resources...'
+
+                sh '''
+                    echo "=== PODS ==="
+                    kubectl get pods -n ${K8S_NAMESPACE}
+
+                    echo "=== SERVICES ==="
+                    kubectl get svc -n ${K8S_NAMESPACE}
+
+                    echo "=== DEPLOYMENTS ==="
+                    kubectl get deployments -n ${K8S_NAMESPACE}
+                '''
             }
         }
     }
 
     post {
-        always {
-            echo "Pipeline terminé avec le statut : ${currentBuild.result ?: 'SUCCESS'}"
-        }
         success {
-            echo "✅ CI/CD SUCCESS : L'application est en ligne sur Kubernetes !"
+            echo "🎉 Pipeline completed successfully !"
         }
         failure {
-            echo "❌ CI/CD FAILURE : Vérifiez les logs. Étape échouée : ${currentBuild.stageName}"
+            echo "❌ Pipeline failed !"
+        }
+        always {
+            cleanWs()
         }
     }
 }
