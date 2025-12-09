@@ -5,7 +5,7 @@ metadata:
   name: spring-config
   namespace: devops
 data:
-  DB_URL: "jdbc:mysql://mysql-service:3306/devopsdb"
+  DB_URL: "jdbc:mysql://mysql-service:3306/studentdb"
 
 ---
 # 2. Secret - Credentials de la base de données (encodé en base64)
@@ -40,7 +40,7 @@ spec:
       - name: spring-app
         image: dhiaayadi/dhiaayadii:latest
         ports:
-        - containerPort: 8002
+        - containerPort: 8089
         env:
         - name: SPRING_DATASOURCE_URL
           valueFrom:
@@ -70,7 +70,7 @@ spec:
   selector:
     app: spring-app
   ports:
-  - port: 8002
-    targetPort: 8002
+  - port: 8089
+    targetPort: 8089
     nodePort: 30080
     protocol: TCP
