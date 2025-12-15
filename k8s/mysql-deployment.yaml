@@ -52,7 +52,7 @@ spec:
         - name: MYSQL_ROOT_PASSWORD
           value: "rootpassword"
         - name: MYSQL_DATABASE
-          value: "devopsdb"
+          value: "studentdb"
         ports:
         - containerPort: 3306
           name: mysql

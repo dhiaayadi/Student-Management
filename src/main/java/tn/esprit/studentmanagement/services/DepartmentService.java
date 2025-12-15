@@ -10,7 +10,7 @@ import java.util.List;
 @Service
 
 public class DepartmentService implements IDepartmentService {
-
+    @Autowired
     DepartmentRepository departmentRepository;
 
     @Override

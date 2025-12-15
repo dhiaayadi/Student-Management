@@ -1,0 +1,2 @@
+curl -i http://127.0.0.1:40277/student/Depatment/getAllDepartment 
+curl -i http://127.0.0.1:35463/department/getAllDepartment
