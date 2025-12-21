@@ -1,0 +1,360 @@
+# =========================
+# PROMETHEUS CONFIGURATION COMPLÈTE (CORRIGÉE)
+# =========================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: devops
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: 'devops-cluster'
+        environment: 'production'
+
+    scrape_configs:
+      # 1. PROMETHEUS (Interne)
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      # 2. JENKINS CI/CD
+      - job_name: 'jenkins'
+        metrics_path: '/prometheus'
+        static_configs:
+          - targets: ['172.21.58.68:8082'] 
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: instance
+            replacement: 'jenkins-server'
+
+      # 3. SPRING BOOT APPLICATION
+      - job_name: 'spring-boot'
+        metrics_path: '/actuator/prometheus'
+        static_configs:
+          - targets: ['spring-service:8089']
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: instance
+            replacement: 'spring-boot-app'
+
+      # 4. MYSQL DATABASE
+      - job_name: 'mysql'
+        static_configs:
+          - targets: ['mysql-exporter-service:9104']
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: instance
+            replacement: 'mysql-database'
+
+      # 5. NODE EXPORTER (Système)
+      - job_name: 'node-exporter'
+        static_configs:
+          - targets: ['node-exporter-service:9100']
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: instance
+            replacement: 'ubuntu-node'
+
+      # 6. KUBERNETES PODS (Auto-discovery)
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - devops
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+
+---
+# =========================
+# PersistentVolume
+# =========================
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: prometheus-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: manual
+  hostPath:
+    path: /mnt/data/prometheus
+
+---
+# =========================
+# PersistentVolumeClaim
+# =========================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-pvc
+  namespace: devops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: manual
+
+---
+# =========================
+# Deployment Prometheus (CORRIGÉ)
+# =========================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-deployment
+  namespace: devops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      
+      # ✅ AJOUT POUR CORRIGER LE PROBLÈME DE PERMISSION
+      securityContext:
+        runAsUser: 0   # Root user
+        fsGroup: 0     # Root group
+      # =================================================
+
+      containers:
+        - name: prometheus
+          image: prom/prometheus:latest
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--web.enable-lifecycle"
+          ports:
+            - containerPort: 9090
+              name: prometheus
+          volumeMounts:
+            - name: prometheus-config-volume
+              mountPath: /etc/prometheus
+            - name: prometheus-storage
+              mountPath: /prometheus
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: prometheus-config-volume
+          configMap:
+            name: prometheus-config
+        - name: prometheus-storage
+          persistentVolumeClaim:
+            claimName: prometheus-pvc
+
+---
+# =========================
+# RBAC (Droits d'accès)
+# =========================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: devops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: devops
+
+---
+# =========================
+# Service Prometheus
+# =========================
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+  namespace: devops
+spec:
+  type: NodePort
+  selector:
+    app: prometheus
+  ports:
+    - name: prometheus-web
+      port: 9090
+      targetPort: 9090
+      nodePort: 30091
+      protocol: TCP
+
+---
+# =========================
+# MySQL Exporter
+# =========================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-exporter-deployment
+  namespace: devops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql-exporter
+  template:
+    metadata:
+      labels:
+        app: mysql-exporter
+    spec:
+      containers:
+        - name: mysql-exporter
+          image: prom/mysqld-exporter:v0.14.0
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "root:rootpassword@(mysql-service:3306)/"
+          ports:
+            - containerPort: 9104
+              name: metrics
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+
+---
+# Service MySQL Exporter
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-exporter-service
+  namespace: devops
+spec:
+  type: ClusterIP
+  selector:
+    app: mysql-exporter
+  ports:
+    - port: 9104
+      targetPort: 9104
+      protocol: TCP
+
+---
+# =========================
+# Node Exporter
+# =========================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: devops
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+        - name: node-exporter
+          image: prom/node-exporter:latest
+          args:
+            - "--path.procfs=/host/proc"
+            - "--path.sysfs=/host/sys"
+            - "--path.rootfs=/host/root"
+            - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+          ports:
+            - containerPort: 9100
+              name: metrics
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: root
+              mountPath: /host/root
+              readOnly: true
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: root
+          hostPath:
+            path: /
+
+---
+# Service Node Exporter
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-exporter-service
+  namespace: devops
+spec:
+  type: ClusterIP
+  selector:
+    app: node-exporter
+  ports:
+    - port: 9100
+      targetPort: 9100
+      protocol: TCP
