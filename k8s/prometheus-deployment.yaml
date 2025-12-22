@@ -25,7 +25,7 @@ data:
       - job_name: 'jenkins'
         metrics_path: '/prometheus'
         static_configs:
-          - targets: ['172.21.58.68:8082'] 
+          - targets: ['http://localhost:7070/'] 
         relabel_configs:
           - source_labels: [__address__]
             target_label: instance
